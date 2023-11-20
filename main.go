@@ -4,10 +4,13 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os/exec"
 	"os/user"
+	"strconv"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -17,28 +20,28 @@ import (
 var labels = []string{"device"}
 
 type nvmeCollector struct {
-	nvmeCriticalWarning *prometheus.Desc
-	nvmeTemperature *prometheus.Desc
-	nvmeAvailSpare *prometheus.Desc
-	nvmeSpareThresh *prometheus.Desc
-	nvmePercentUsed *prometheus.Desc
+	nvmeCriticalWarning                    *prometheus.Desc
+	nvmeTemperature                        *prometheus.Desc
+	nvmeAvailSpare                         *prometheus.Desc
+	nvmeSpareThresh                        *prometheus.Desc
+	nvmePercentUsed                        *prometheus.Desc
 	nvmeEnduranceGrpCriticalWarningSummary *prometheus.Desc
-	nvmeDataUnitsRead *prometheus.Desc
-	nvmeDataUnitsWritten *prometheus.Desc
-	nvmeHostReadCommands *prometheus.Desc
-	nvmeHostWriteCommands *prometheus.Desc
-	nvmeControllerBusyTime *prometheus.Desc
-	nvmePowerCycles *prometheus.Desc
-	nvmePowerOnHours *prometheus.Desc
-	nvmeUnsafeShutdowns *prometheus.Desc
-	nvmeMediaErrors *prometheus.Desc
-	nvmeNumErrLogEntries *prometheus.Desc
-	nvmeWarningTempTime *prometheus.Desc
-	nvmeCriticalCompTime *prometheus.Desc
-	nvmeThmTemp1TransCount *prometheus.Desc
-	nvmeThmTemp2TransCount *prometheus.Desc
-	nvmeThmTemp1TotalTime *prometheus.Desc
-	nvmeThmTemp2TotalTime *prometheus.Desc
+	nvmeDataUnitsRead                      *prometheus.Desc
+	nvmeDataUnitsWritten                   *prometheus.Desc
+	nvmeHostReadCommands                   *prometheus.Desc
+	nvmeHostWriteCommands                  *prometheus.Desc
+	nvmeControllerBusyTime                 *prometheus.Desc
+	nvmePowerCycles                        *prometheus.Desc
+	nvmePowerOnHours                       *prometheus.Desc
+	nvmeUnsafeShutdowns                    *prometheus.Desc
+	nvmeMediaErrors                        *prometheus.Desc
+	nvmeNumErrLogEntries                   *prometheus.Desc
+	nvmeWarningTempTime                    *prometheus.Desc
+	nvmeCriticalCompTime                   *prometheus.Desc
+	nvmeThmTemp1TransCount                 *prometheus.Desc
+	nvmeThmTemp2TransCount                 *prometheus.Desc
+	nvmeThmTemp1TotalTime                  *prometheus.Desc
+	nvmeThmTemp2TotalTime                  *prometheus.Desc
 }
 
 // nvme smart-log field descriptions can be found on page 180 of:
@@ -206,6 +209,19 @@ func (c *nvmeCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.nvmeThmTemp2TotalTime
 }
 
+func ToFloat(value gjson.Result) float64 {
+	if value.Type == gjson.String {
+		noCommas := strings.Replace(value.String(), ",", "", -1)
+		f, err := strconv.ParseFloat(noCommas, 64)
+		if err != nil {
+			return 0
+		}
+		return f
+	}
+
+	return value.Float()
+}
+
 func (c *nvmeCollector) Collect(ch chan<- prometheus.Metric) {
 	nvmeDeviceCmd, err := exec.Command("nvme", "list", "-o", "json").Output()
 	if err != nil {
@@ -223,53 +239,57 @@ func (c *nvmeCollector) Collect(ch chan<- prometheus.Metric) {
 		if !gjson.Valid(string(nvmeSmartLog)) {
 			log.Fatalf("nvmeSmartLog json is not valid for device: %s: %s\n", nvmeDevice.String(), err)
 		}
-		nvmeSmartLogMetrics := gjson.GetMany(string(nvmeSmartLog),
-                                                     "critical_warning",
-                                                     "temperature",
-                                                     "avail_spare",
-                                                     "spare_thresh",
-                                                     "percent_used",
-                                                     "endurance_grp_critical_warning_summary",
-                                                     "data_units_read",
-                                                     "data_units_written",
-                                                     "host_read_commands",
-                                                     "host_write_commands",
-                                                     "controller_busy_time",
-                                                     "power_cycles",
-                                                     "power_on_hours",
-                                                     "unsafe_shutdowns",
-                                                     "media_errors",
-                                                     "num_err_log_entries",
-                                                     "warning_temp_time",
-                                                     "critical_comp_time",
-                                                     "thm_temp1_trans_count",
-                                                     "thm_temp2_trans_count",
-                                                     "thm_temp1_total_time",
-                                                     "thm_temp2_total_time",)
 
-		ch <- prometheus.MustNewConstMetric(c.nvmeCriticalWarning, prometheus.GaugeValue, nvmeSmartLogMetrics[0].Float(), nvmeDevice.String())
+		// output the debug message of nvmeSmartLog to stdout
+		fmt.Println(string(nvmeSmartLog))
+
+		nvmeSmartLogMetrics := gjson.GetMany(string(nvmeSmartLog),
+			"critical_warning",
+			"temperature",
+			"avail_spare",
+			"spare_thresh",
+			"percent_used",
+			"endurance_grp_critical_warning_summary",
+			"data_units_read",
+			"data_units_written",
+			"host_read_commands",
+			"host_write_commands",
+			"controller_busy_time",
+			"power_cycles",
+			"power_on_hours",
+			"unsafe_shutdowns",
+			"media_errors",
+			"num_err_log_entries",
+			"warning_temp_time",
+			"critical_comp_time",
+			"thm_temp1_trans_count",
+			"thm_temp2_trans_count",
+			"thm_temp1_total_time",
+			"thm_temp2_total_time")
+
+		ch <- prometheus.MustNewConstMetric(c.nvmeCriticalWarning, prometheus.GaugeValue, ToFloat(nvmeSmartLogMetrics[0]), nvmeDevice.String())
 		// convert kelvin to fahrenheit
-		ch <- prometheus.MustNewConstMetric(c.nvmeTemperature, prometheus.GaugeValue, (nvmeSmartLogMetrics[1].Float() - 273.15) * 9/5 + 32, nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeAvailSpare, prometheus.GaugeValue, nvmeSmartLogMetrics[2].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeSpareThresh, prometheus.GaugeValue, nvmeSmartLogMetrics[3].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmePercentUsed, prometheus.GaugeValue, nvmeSmartLogMetrics[4].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeEnduranceGrpCriticalWarningSummary, prometheus.GaugeValue, nvmeSmartLogMetrics[5].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeDataUnitsRead, prometheus.CounterValue, nvmeSmartLogMetrics[6].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeDataUnitsWritten, prometheus.CounterValue, nvmeSmartLogMetrics[7].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeHostReadCommands, prometheus.CounterValue, nvmeSmartLogMetrics[8].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeHostWriteCommands, prometheus.CounterValue, nvmeSmartLogMetrics[9].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeControllerBusyTime, prometheus.CounterValue, nvmeSmartLogMetrics[10].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmePowerCycles, prometheus.CounterValue, nvmeSmartLogMetrics[11].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmePowerOnHours, prometheus.CounterValue, nvmeSmartLogMetrics[12].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeUnsafeShutdowns, prometheus.CounterValue, nvmeSmartLogMetrics[13].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeMediaErrors, prometheus.CounterValue, nvmeSmartLogMetrics[14].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeNumErrLogEntries, prometheus.CounterValue, nvmeSmartLogMetrics[15].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeWarningTempTime, prometheus.CounterValue, nvmeSmartLogMetrics[16].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeCriticalCompTime, prometheus.CounterValue, nvmeSmartLogMetrics[17].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeThmTemp1TransCount, prometheus.CounterValue, nvmeSmartLogMetrics[18].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeThmTemp2TransCount, prometheus.CounterValue, nvmeSmartLogMetrics[19].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeThmTemp1TotalTime, prometheus.CounterValue, nvmeSmartLogMetrics[20].Float(), nvmeDevice.String())
-		ch <- prometheus.MustNewConstMetric(c.nvmeThmTemp2TotalTime, prometheus.CounterValue, nvmeSmartLogMetrics[21].Float(), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeTemperature, prometheus.GaugeValue, (ToFloat(nvmeSmartLogMetrics[1])-273.15)*9/5+32, nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeAvailSpare, prometheus.GaugeValue, ToFloat(nvmeSmartLogMetrics[2]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeSpareThresh, prometheus.GaugeValue, ToFloat(nvmeSmartLogMetrics[3]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmePercentUsed, prometheus.GaugeValue, ToFloat(nvmeSmartLogMetrics[4]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeEnduranceGrpCriticalWarningSummary, prometheus.GaugeValue, ToFloat(nvmeSmartLogMetrics[5]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeDataUnitsRead, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[6]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeDataUnitsWritten, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[7]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeHostReadCommands, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[8]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeHostWriteCommands, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[9]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeControllerBusyTime, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[10]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmePowerCycles, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[11]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmePowerOnHours, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[12]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeUnsafeShutdowns, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[13]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeMediaErrors, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[14]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeNumErrLogEntries, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[15]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeWarningTempTime, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[16]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeCriticalCompTime, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[17]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeThmTemp1TransCount, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[18]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeThmTemp2TransCount, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[19]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeThmTemp1TotalTime, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[20]), nvmeDevice.String())
+		ch <- prometheus.MustNewConstMetric(c.nvmeThmTemp2TotalTime, prometheus.CounterValue, ToFloat(nvmeSmartLogMetrics[21]), nvmeDevice.String())
 	}
 }
 
@@ -291,5 +311,8 @@ func main() {
 	}
 	prometheus.MustRegister(newNvmeCollector())
 	http.Handle("/metrics", promhttp.Handler())
+
+	fmt.Print("Starting server on port " + *port + "\n")
+
 	log.Fatal(http.ListenAndServe(":"+*port, nil))
 }
