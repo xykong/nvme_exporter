@@ -240,9 +240,6 @@ func (c *nvmeCollector) Collect(ch chan<- prometheus.Metric) {
 			log.Fatalf("nvmeSmartLog json is not valid for device: %s: %s\n", nvmeDevice.String(), err)
 		}
 
-		// output the debug message of nvmeSmartLog to stdout
-		fmt.Println(string(nvmeSmartLog))
-
 		nvmeSmartLogMetrics := gjson.GetMany(string(nvmeSmartLog),
 			"critical_warning",
 			"temperature",
